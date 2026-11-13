@@ -1,3 +1,20 @@
+### 2.6
+模块接管Su日志队列后 会按原格式继续写入磁盘日志(10MiB滚动 默认保留3天)
+
+管理器中的Su日志页面恢复可用 可作为提权请求的审计页面
+
+安装与启动提示同步更新
+
+其他细节优化
+
+While the module owns the SuLog queue it now keeps writing the on-disk logs in the original format (10 MiB rotation, 3 days retention).
+
+The manager's Su Log page works again and can be used to audit root requests.
+
+Updated the installer/boot notices accordingly.
+
+Other small improvements.
+
 ### 2.5
 新增对 BakaSU(原 ReSukiSU)的官方支持
 

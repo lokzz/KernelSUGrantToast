@@ -53,7 +53,7 @@ const EnglishKeys: typeof BaseLang = {
   "ignorePackage.showSystemApps.label": "Show System Applications",
 
   "autoDeleteLog.label": "Auto-delete logs",
-  "autoDeleteLog.detail": "Automatically delete SuLog logs generated during startup after initialization is complete. This can prevent log files from piling up and taking up storage, but may make it harder to report issues because these log files may be useful.",
+  "autoDeleteLog.detail": "Delete existing SuLog files when the module starts. Off by default: the module appends to today's file and keeps 3 days of history (10 MiB per file, then rotation).",
   "longTimeToast.label": "Extended Toast Duration",
   "longTimeToast.detail": "Make the toast message stay on the screen longer. This may not work on some systems. Due to Android limitations, this duration cannot be finely adjusted.",
 

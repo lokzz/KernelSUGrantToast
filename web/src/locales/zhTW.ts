@@ -53,7 +53,7 @@ const TraditionalChineseKeys: typeof BaseLang = {
     "ignorePackage.showSystemApps.label": "顯示系統應用程式",
 
     "autoDeleteLog.label": "自動刪除日誌",
-    "autoDeleteLog.detail": "初始化完成後自動刪除啟動時產生的 SuLog 日誌，可避免日誌檔案堆積占用儲存空間，但可能不利於回報異常（這些日誌檔案可能有用）",
+    "autoDeleteLog.detail": "模組啟動時刪除既有的 SuLog 日誌檔 預設關閉 關閉時會附加到當天的檔案並保留 3 天歷史（單一檔案達到 10MiB 後輪替）",
     "longTimeToast.label": "延長提示時間",
     "longTimeToast.detail": "讓彈出的 Toast 顯示更長時間。在部分系統上可能無效。受 Android 限制，此時間無法微調。",
 

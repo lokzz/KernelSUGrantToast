@@ -60,25 +60,27 @@ queue) and takes over the file descriptor used to receive the relevant data.
 Only one process can hold that descriptor, so the original reader must be
 terminated first.
 
+While the module owns the queue it keeps writing the on-disk SuLog files in
+the exact format the stock reader uses (`sulogd` on BakaSU, an internal ksud
+reader on KernelSU): `sulog-YYYY-MM-DD[-N].log` under `/data/adb/ksu/log`,
+with rotation at 10 MiB and 3 days of retention. That keeps the manager's
+Su Log page working as an audit view for granted and failed `su` requests.
+
 If an Android app is found to have been granted root access, the module
 retrieves information about the app and displays a notification when the
 configured conditions are met.
 
 ### Notes
 
-Because the process that originally writes the log file is terminated after the
-device finishes booting, Su logs will no longer be recorded.
+The module writes SuLog itself, so the manager's Su Log page remains usable
+while the module is active. Files stay in the stock location and format, so
+other tools that parse them keep working.
 
-To prevent files from accumulating, the module also deletes old log files after
-it starts.
+The "Auto-delete logs" option deletes existing SuLog files when the module
+starts (off by default). When it is off the module appends to today's file and
+keeps 3 days of history.
 
-As a result, you will no longer be able to view Su log data in the manager
-while the module is active. Uninstalling the module restores SuLog
-automatically.
-
-(In theory, the original process could be left running and the module could
-obtain information by monitoring changes to the log file, but this may have
-poor performance.)
+Uninstalling the module restores the stock reader automatically.
 
 ### Final Note
 

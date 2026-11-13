@@ -53,7 +53,7 @@ const SimplifiedChineseKeys = {
     "ignorePackage.showSystemApps.label": "显示系统应用",
 
     "autoDeleteLog.label": "自动删除日志",
-    "autoDeleteLog.detail": "初始化完成后自动删除启动时生成的SuLog日志 可避免日志文件堆积占用存储 但可能不利于反馈异常(这些日志文件可能有用)",
+    "autoDeleteLog.detail": "模块启动时删除已有的SuLog日志文件 默认关闭 关闭时会追加到当天的文件并保留3天历史(单个文件达到10MiB后滚动)",
     "longTimeToast.label": "延长提示时间",
     "longTimeToast.detail": "使弹出的提示Toast存在更长时间 在部分系统上可能无效 由于Android限制 此时间不支持细调",
 

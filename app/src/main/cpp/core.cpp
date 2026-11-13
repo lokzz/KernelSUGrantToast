@@ -13,11 +13,6 @@
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "KernelSuGrantToast", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "KernelSuGrantToast", __VA_ARGS__)
-#define TASK_COMM_LEN  16
-#define KSU_EVENT_TYPE_DROPPED 0xFFFFu
-#define KSU_SULOG_EVENT_ROOT_EXECVE 1u
-#define KSU_SULOG_EVENT_SUCOMPAT 2u
-#define KSU_SULOG_EVENT_IOCTL_GRANT_ROOT 3u
 static JavaVM *jvm = nullptr;
 static jclass globalEntryClass = nullptr;
 static jmethodID onFallbackSuEventJavaMethod = nullptr;
@@ -28,23 +23,6 @@ static std::map<uint32_t, time_t> ignoredUid;
 static short packageSearchDepth = 1;
 static short internalToastCooldown = 3;
 static bool autoDeleteLog = false;
-
-struct __attribute__((packed)) EventRecordHeader {
-    uint16_t record_type;
-    uint16_t flags;
-    uint32_t payload_len;
-    uint64_t seq;
-    uint64_t ts_ns;
-};
-
-struct __attribute__((packed)) SulogEventHeader {
-    uint16_t version;
-    uint16_t event_type;
-    int32_t retval;
-    uint32_t pid, tgid, ppid, uid, euid;
-    char comm[TASK_COMM_LEN];
-    uint32_t filename_len, argv_len;
-};
 
 void pushToastedApplicationMap(uint32_t pid, time_t timestamp) {
     if (toastedApplication.size() > 4) {
@@ -168,6 +146,9 @@ void pollingLogEvent(int suLogFd) {
                             appendLog("buffer frame overflow");
                             break;
                         }
+                        // Keep BakaSU/KernelSU's on-disk SuLog trail alive: we own
+                        // the queue now, so nobody else is writing these files.
+                        writeSuLogRecord(*rec, buf + off + sizeof(EventRecordHeader), rec->payload_len);
                         if (rec->record_type != KSU_EVENT_TYPE_DROPPED) {
                             auto *hdr = reinterpret_cast<SulogEventHeader *>(buf + off + sizeof(EventRecordHeader));
                             if (rec->payload_len >= sizeof(SulogEventHeader) && hdr->retval == 0) {
@@ -202,6 +183,7 @@ void pollingLogEvent(int suLogFd) {
     done:
     close(epfd);
     close(suLogFd);
+    closeSuLogWriter();
     jmethodID modifyModuleDescriptionMethod = localJniEnv->GetStaticMethodID(globalEntryClass, "onFatalException", "(Ljava/lang/String;)V");
     jstring description = localJniEnv->NewStringUTF("Error on working,Exited");
     localJniEnv->CallStaticVoidMethod(globalEntryClass, modifyModuleDescriptionMethod, description);
@@ -227,10 +209,13 @@ bool handleSuLog() {
     // owns the queue it can never obtain the fd again, so stop it instead of
     // letting it retry forever.
     killSpareSulogdProcesses();
+    // Refresh the on-disk trail: optionally drop the logs written before the
+    // takeover, then continue writing them ourselves.
+    if (autoDeleteLog) deleteSuLogFile();
+    initSuLogWriter();
     appendLog("start event polling");
     std::thread pollingThread(pollingLogEvent, suLogFd);
     pollingThread.detach();
-    if (autoDeleteLog) deleteSuLogFile();
     return true;
 }
 
