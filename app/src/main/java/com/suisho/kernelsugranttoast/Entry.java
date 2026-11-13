@@ -54,6 +54,7 @@ public class Entry {
             return;
         }
         try {
+            Log.i(TAG, "Using ksud: " + Ksud.getPath());
             SettingArguments tmpArgs = SettingArguments.initSettings(args, ignorePackageList);
             customToastText = tmpArgs.customToastText;
             toastShowTime = tmpArgs.longTimeToast ? Toast.LENGTH_LONG : Toast.LENGTH_SHORT;
@@ -186,13 +187,14 @@ public class Entry {
     private static void modifyModuleDescription(String descText) {
         //使用ksu特性临时更改描述
         try {
-            File ksudFile = new File("/data/adb/ksud");
+            String ksudPath = Ksud.getPath();
+            File ksudFile = new File(ksudPath);
             if(!ksudFile.exists()) {
                 Log.w(TAG, "ksud file not found!");
                 return;
             }
             String desc = String.format(Locale.getDefault(), "[%s]Show a root granted toast like Magisk.", descText);
-            ProcessBuilder processBuilder = new ProcessBuilder("/data/adb/ksud", "module", "config", "set", "--temp", "override.description", desc);
+            ProcessBuilder processBuilder = new ProcessBuilder(ksudPath, "module", "config", "set", "--temp", "override.description", desc);
             processBuilder.environment().put("KSU_MODULE", "ksuGrantToast");
             java.lang.Process changeDescriptorProcess = processBuilder.start();
             //等待写入完成 方便降权

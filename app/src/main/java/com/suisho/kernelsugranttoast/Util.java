@@ -50,7 +50,7 @@ public class Util {
 
     @Nullable
     public static <T> T getModuleConfig(String configKey, Class<T> type) {
-        ProcessBuilder processBuilder = new ProcessBuilder("/data/adb/ksud", "module", "config", "get", configKey);
+        ProcessBuilder processBuilder = new ProcessBuilder(Ksud.getPath(), "module", "config", "get", configKey);
         processBuilder.environment().put("KSU_MODULE", "ksuGrantToast");
         try {
             java.lang.Process readConfigProcess = processBuilder.start();

@@ -1,3 +1,36 @@
+### 2.5
+新增对 BakaSU(原 ReSukiSU)的官方支持
+
+安装时自动识别 BakaSU 并改用 SuLog 特性探测 不再依赖 KernelSU 的版本号
+
+改进 SuLog fd 的接管流程 支持 BakaSU 的 sulogd 守护进程 并在其残留时清理
+
+改进 SuLog fd 所有者的查找方式 支持变体命名与多个持有者 并在失败时重试
+
+自动处理 KernelSU 3.x/BakaSU 下遗留的旧版 TOML 模块配置 避免 WebUI 无法读写设置
+
+自动定位 ksud(支持 /data/adb/ksud 与 /data/adb/ksu/bin/ksud)
+
+卸载时自动恢复 SuLog 功能
+
+其他稳定性与日志改进
+
+Adds official support for BakaSU (formerly ReSukiSU).
+
+The installer detects BakaSU and probes the SuLog feature instead of relying on KernelSU's version code.
+
+Improved the SuLog fd takeover so BakaSU's `sulogd` daemon is released correctly, and leftovers are cleaned up.
+
+Improved SuLog fd owner discovery: variant anon-inode names and multiple owners are handled, and the ioctl is retried on failure.
+
+Handles legacy TOML module configs left behind by KernelSU 3.x/BakaSU so the WebUI can read and write settings again.
+
+Locates ksud automatically (`/data/adb/ksud` and `/data/adb/ksu/bin/ksud`).
+
+Restores SuLog automatically when the module is uninstalled.
+
+Other stability and logging improvements.
+
 ### 2.4
 重写初始化时加载配置的方式
 

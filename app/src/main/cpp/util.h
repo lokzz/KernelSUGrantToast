@@ -14,6 +14,8 @@ bool utilInit(bool enableDebugLog);
 
 bool tryKillFdOwnerProcess();
 
+void killSpareSulogdProcesses();
+
 int getKernelSuDriver();
 
 int getSuLogFd(int driverFd);

@@ -3,13 +3,20 @@
 #include "android/log.h"
 #include "fcntl.h"
 #include "sys/syscall.h"
+#include "sys/ioctl.h"
 #include "dirent.h"
+#include "signal.h"
+#include "vector"
+#include <cerrno>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 using namespace std;
 #define KSU_INSTALL_MAGIC1 0xDEADBEEFu
 #define KSU_INSTALL_MAGIC2 0xCAFEBABEu
 #define KSU_IOCTL_GET_SULOG_FD 0x40044B14u
-#define SULOG_FD_LINK "anon_inode:[ksu_sulog]"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "KernelSuGrantToast", __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, "KernelSuGrantToast", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "KernelSuGrantToast", __VA_ARGS__)
@@ -56,42 +63,50 @@ void appendLog(const std::string &log) {
     }
 }
 
-pid_t findSulogFdOwnerPid() {
+/*
+ * The kernel exposes the SuLog event queue through an anon inode. KernelSU and
+ * BakaSU name it "anon_inode:[ksu_sulog]"; downstream forks occasionally
+ * rename it, so match the anon_inode prefix plus the feature name instead of
+ * hardcoding one spelling.
+ * */
+static bool isSulogFdLink(const char *link) {
+    if (link == nullptr) return false;
+    if (strncmp(link, "anon_inode:[", 12) != 0) return false;
+    return strstr(link, "sulog") != nullptr;
+}
+
+/*
+ * Only one process may hold the SuLog fd. Find everyone who currently does.
+ * */
+static vector<pid_t> findSulogFdOwnerPids() {
+    vector<pid_t> owners;
     DIR *procDir = opendir("/proc");
-    if (!procDir) {
-        return -1;
-    }
-    const size_t str_len_size = sizeof(SULOG_FD_LINK) - 1;
+    if (!procDir) return owners;
+    const pid_t self = getpid();
     while (dirent *procEntry = readdir(procDir)) {
-        if (procEntry->d_type != DT_DIR || !isNumeric(procEntry->d_name)) {
-            continue;
-        }
-        string fdListPath = "/proc/" + string(procEntry->d_name) + "/fd";
-        DIR *fdDir = opendir(fdListPath.c_str());
-        if (!fdDir) {
-            continue;
-        }
+        if (!isNumeric(procEntry->d_name)) continue;
+        auto pid = static_cast<pid_t>(strtol(procEntry->d_name, nullptr, 10));
+        if (pid <= 1 || pid == self) continue;
+        string fdDirPath = "/proc/" + string(procEntry->d_name) + "/fd";
+        DIR *fdDir = opendir(fdDirPath.c_str());
+        if (!fdDir) continue;
+        bool owned = false;
         while (dirent *fdEntry = readdir(fdDir)) {
             if (!isNumeric(fdEntry->d_name)) continue;
-            char link[str_len_size];
-            ssize_t readLength = readlinkat(dirfd(fdDir), fdEntry->d_name, link, str_len_size);
-            if (readLength == str_len_size && memcmp(link, SULOG_FD_LINK, str_len_size) == 0) {
-                LOGI("Found su log fd owner pid:%s", procEntry->d_name);
-                auto pid = static_cast<pid_t>(strtol(procEntry->d_name, nullptr, 10));
-                if (pid == 0) {
-                    LOGE("Failed to get pid from proc entry name!");
-                    continue;
-                }
-                closedir(fdDir);
-                closedir(procDir);
-                LOGI("Return su log fd owner pid");
-                return pid;
+            char link[128];
+            ssize_t readLength = readlinkat(dirfd(fdDir), fdEntry->d_name, link, sizeof(link) - 1);
+            if (readLength <= 0) continue;
+            link[readLength] = '\0';
+            if (isSulogFdLink(link)) {
+                owned = true;
+                break;
             }
         }
         closedir(fdDir);
+        if (owned) owners.push_back(pid);
     }
     closedir(procDir);
-    return -1;
+    return owners;
 }
 
 inline string getProcessCmdline(pid_t pid) {
@@ -107,16 +122,36 @@ inline string getProcessCmdline(pid_t pid) {
     return "";
 }
 
+static pid_t findPidByCmdline(const string &name) {
+    DIR *procDir = opendir("/proc");
+    if (!procDir) return -1;
+    while (dirent *procEntry = readdir(procDir)) {
+        if (!isNumeric(procEntry->d_name)) continue;
+        auto pid = static_cast<pid_t>(strtol(procEntry->d_name, nullptr, 10));
+        if (pid <= 1) continue;
+        if (getProcessCmdline(pid) == name) {
+            closedir(procDir);
+            return pid;
+        }
+    }
+    closedir(procDir);
+    return -1;
+}
+
 inline pid_t getPidByName(const string &name) {
     FILE *result = popen(("pidof " + name).c_str(), "r");
-    if (!result) return -1;
-    char buf[64];
-    if (fgets(buf, sizeof(buf), result) == nullptr) {
-        pclose(result);
-        return -1;
+    if (result != nullptr) {
+        char buf[64] = {0};
+        if (fgets(buf, sizeof(buf), result) != nullptr) {
+            pclose(result);
+            auto pid = static_cast<pid_t>(strtol(buf, nullptr, 10));
+            if (pid > 1) return pid;
+        } else {
+            pclose(result);
+        }
     }
-    pclose(result);
-    return static_cast<pid_t>(strtol(buf, nullptr, 10));
+    // pidof is missing or failed; walk /proc instead.
+    return findPidByCmdline(name);
 }
 
 bool utilInit(bool useDebugLog) {
@@ -139,22 +174,69 @@ bool tryKillFdOwnerProcess() {
      * 如果是启动后才开启该功能 进程名会不同
      * 但我选择初始化时如果sulog未开启直接退出
      * */
-    pid_t fdOwnerPid = findSulogFdOwnerPid();
-    if (fdOwnerPid < 0) {
-        LOGE("Failed to find su log fd owner pid");
+    vector<pid_t> owners = findSulogFdOwnerPids();
+    if (owners.empty()) {
+        LOGW("No process currently holds the SuLog fd");
         return false;
     }
-    LOGI("Sulog fd owner pid:%d", fdOwnerPid);
-    if (fdOwnerPid > 1) {
-        kill(fdOwnerPid, SIGKILL);
-        //等待退出
-        for (int i = 0; i < 25; ++i) { // 500ms
-            if (kill(fdOwnerPid, 0) == -1 && errno == ESRCH) break;
-            usleep(20000);
+    bool signalSent = false;
+    for (pid_t pid : owners) {
+        LOGI("Killing SuLog fd owner pid:%d", pid);
+        if (kill(pid, SIGKILL) == 0) {
+            signalSent = true;
+        } else {
+            LOGW("Failed to kill SuLog fd owner pid:%d, errno:%d", pid, errno);
         }
-        return true;
     }
-    return false;
+    if (!signalSent) return false;
+    //等待退出 最多1.5秒
+    for (int i = 0; i < 75; ++i) {
+        bool anyAlive = false;
+        for (pid_t pid : owners) {
+            if (kill(pid, 0) == 0 || errno != ESRCH) {
+                anyAlive = true;
+                break;
+            }
+        }
+        if (!anyAlive) return true;
+        usleep(20000);
+    }
+    LOGW("SuLog fd owner is still alive after SIGKILL");
+    // The fd is released as soon as the process dies; retry the ioctl anyway.
+    return true;
+}
+
+void killSpareSulogdProcesses() {
+    /*
+     * BakaSU runs the SuLog reader as a dedicated `sulogd` daemon (exec'd via
+     * /proc/self/exe). After this module takes the queue over, a surviving
+     * sulogd can never obtain the fd and would retry forever, so stop it.
+     * */
+    DIR *procDir = opendir("/proc");
+    if (!procDir) return;
+    const pid_t self = getpid();
+    while (dirent *procEntry = readdir(procDir)) {
+        if (!isNumeric(procEntry->d_name)) continue;
+        auto pid = static_cast<pid_t>(strtol(procEntry->d_name, nullptr, 10));
+        if (pid <= 1 || pid == self) continue;
+        string raw;
+        if (!readProcFile("/proc/" + to_string(pid) + "/cmdline", raw)) continue;
+        bool isSulogd = false;
+        size_t start = 0;
+        while (start < raw.size()) {
+            size_t end = raw.find('\0', start);
+            if (end == string::npos) end = raw.size();
+            if (end - start == 6 && memcmp(raw.data() + start, "sulogd", 6) == 0) {
+                isSulogd = true;
+                break;
+            }
+            start = end + 1;
+        }
+        if (!isSulogd) continue;
+        LOGI("Killing spare sulogd pid:%d", pid);
+        kill(pid, SIGKILL);
+    }
+    closedir(procDir);
 }
 
 int getKernelSuDriver() {
@@ -167,23 +249,22 @@ int getSuLogFd(int driverFd) {
     struct {
         uint32_t flags;
     } suLog_cmd = {0};
-    int fd = ioctl(driverFd, KSU_IOCTL_GET_SULOG_FD, &suLog_cmd);
-    //被抢了也可能是-1
-    if (fd < 0) {
-        if (errno == EBUSY) {
-            LOGW("Get su log fd failed,trying kill fd owner process...");
-            if (tryKillFdOwnerProcess()) {
-                LOGI("Process killed.Try get su log fd again");
-                //再次尝试获取
-                fd = ioctl(driverFd, KSU_IOCTL_GET_SULOG_FD, &suLog_cmd);
-            }
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        errno = 0;
+        int fd = ioctl(driverFd, KSU_IOCTL_GET_SULOG_FD, &suLog_cmd);
+        if (fd >= 0) return fd;
+        int err = errno;
+        if (err == EINTR) continue;
+        if (err != EBUSY) {
+            LOGE("Get Su log fd failed, errno:%d", err);
+            return -1;
         }
-        //获取之后重新判断
-        if (fd < 0) {
-            LOGE("Get su log fd failed,errno:%d", errno);
-        }
+        LOGW("SuLog fd is busy (attempt %d), releasing the current reader", attempt + 1);
+        tryKillFdOwnerProcess();
+        usleep(150000);
     }
-    return fd;
+    LOGE("Get Su log fd failed: still busy after retries");
+    return -1;
 }
 
 pid_t getPpid(pid_t pid) {

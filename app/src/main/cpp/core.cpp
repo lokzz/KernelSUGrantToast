@@ -1,8 +1,9 @@
 #include "jni.h"
 #include "android/log.h"
 #include <cstdio>
+#include <cerrno>
+#include <fcntl.h>
 #include <unistd.h>
-#include <asm-generic/fcntl.h>
 #include "sys/epoll.h"
 #include "sys/prctl.h"
 #include "thread"
@@ -16,6 +17,7 @@
 #define KSU_EVENT_TYPE_DROPPED 0xFFFFu
 #define KSU_SULOG_EVENT_ROOT_EXECVE 1u
 #define KSU_SULOG_EVENT_SUCOMPAT 2u
+#define KSU_SULOG_EVENT_IOCTL_GRANT_ROOT 3u
 static JavaVM *jvm = nullptr;
 static jclass globalEntryClass = nullptr;
 static jmethodID onFallbackSuEventJavaMethod = nullptr;
@@ -169,16 +171,15 @@ void pollingLogEvent(int suLogFd) {
                         if (rec->record_type != KSU_EVENT_TYPE_DROPPED) {
                             auto *hdr = reinterpret_cast<SulogEventHeader *>(buf + off + sizeof(EventRecordHeader));
                             if (rec->payload_len >= sizeof(SulogEventHeader) && hdr->retval == 0) {
-                                appendLog("new su event: " + std::to_string(hdr->event_type));
+                                appendLog("new su event: type=" + std::to_string(hdr->event_type) +
+                                          " uid=" + std::to_string(hdr->uid) +
+                                          " ppid=" + std::to_string(hdr->ppid));
 //                              //只有这两个是来自第三方的调用 GRANT_ROOT是对管理器自动授权 不要处理
                                 if ((hdr->event_type == KSU_SULOG_EVENT_ROOT_EXECVE || hdr->event_type == KSU_SULOG_EVENT_SUCOMPAT) && hdr->uid != 0) {
                                     appendLog("process su event:ROOT_EXECVE");
                                     processSuEvent(localJniEnv, hdr->uid, hdr->ppid);
-//                                if (hdr->event_type == KSU_SULOG_EVENT_ROOT_EXECVE ||
-//                                    hdr->event_type == KSU_SULOG_EVENT_SUCOMPAT) {
-//                                    appendLog("process su event");
-//                                    processSuEvent(localJniEnv, hdr->uid, hdr->ppid);
-                                    //兼容ReSukiSU的部分hook分支(实际上就是回滚到老逻辑)
+                                    //兼容部分下游分支(SukiSU-Ultra/BakaSU/ReSukiSU)在特定hook模式下
+                                    //事件在提权完成后才被捕获 此时uid为0 只能回退到ppid逻辑
                                 } else if (hdr->event_type == KSU_SULOG_EVENT_SUCOMPAT && hdr->uid == 0) {
                                     appendLog("process su event:SU_COMPAT");
                                     processSuEventWithPpid(static_cast<pid_t>(hdr->ppid));
@@ -221,6 +222,11 @@ bool handleSuLog() {
         LOGE("Failed to get Su log fd");
         return false;
     }
+    appendLog("SuLog fd acquired:" + std::to_string(suLogFd));
+    // BakaSU runs the stock reader as a `sulogd` daemon. Now that this module
+    // owns the queue it can never obtain the fd again, so stop it instead of
+    // letting it retry forever.
+    killSpareSulogdProcesses();
     appendLog("start event polling");
     std::thread pollingThread(pollingLogEvent, suLogFd);
     pollingThread.detach();
