@@ -356,6 +356,9 @@ void deleteSuLogFile() {
 #ifndef SULOG_MAX_FILE_SIZE_BYTES
 #define SULOG_MAX_FILE_SIZE_BYTES (10ULL * 1024ULL * 1024ULL)
 #endif
+#ifndef SULOG_SESSION_STATE_PATH
+#define SULOG_SESSION_STATE_PATH "/data/adb/ksu/.toaster_sulog_session"
+#endif
 
 static const char *SULOG_DIR = SULOG_ROOT_DIR;
 static const uint64_t SULOG_MAX_FILE_SIZE = SULOG_MAX_FILE_SIZE_BYTES;
@@ -528,20 +531,28 @@ static void suLogCleanupExpired(time_t now) {
     closedir(dir);
 }
 
-static void suLogWriteRaw(const char *data, size_t len) {
-    if (suLogWriterFd < 0) return;
+// Returns false on a hard write error (non-EINTR).
+static bool suLogWriteAll(int fd, const char *data, size_t len) {
     size_t off = 0;
     while (off < len) {
-        ssize_t n = write(suLogWriterFd, data + off, len - off);
+        ssize_t n = write(fd, data + off, len - off);
         if (n < 0) {
             if (errno == EINTR) continue;
-            LOGW("SuLog write failed, errno:%d; disabling disk log", errno);
-            close(suLogWriterFd);
-            suLogWriterFd = -1;
-            suLogWriterDisabled = true;
-            return;
+            return false;
         }
         off += (size_t) n;
+    }
+    return true;
+}
+
+static void suLogWriteRaw(const char *data, size_t len) {
+    if (suLogWriterFd < 0) return;
+    if (!suLogWriteAll(suLogWriterFd, data, len)) {
+        LOGW("SuLog write failed, errno:%d; disabling disk log", errno);
+        close(suLogWriterFd);
+        suLogWriterFd = -1;
+        suLogWriterDisabled = true;
+        return;
     }
     suLogWriterSize += len;
 }
@@ -598,7 +609,10 @@ bool initSuLogWriter() {
     }
     if (!suLogWriterOpen(now, index)) return false;
 
-    // Session marker, matching sulogd's daemon_start line.
+    // Session marker, matching sulogd. Reuse the previous boot id to emit a
+    // daemon_restart with a counter: the manager keys daemon events by
+    // (restart, boot_id), so two identical daemon_start lines in one file
+    // would collide in its list.
     std::string bootId;
     if (readProcFile("/proc/sys/kernel/random/boot_id", bootId)) {
         while (!bootId.empty() &&
@@ -606,11 +620,33 @@ bool initSuLogWriter() {
             bootId.pop_back();
         }
     }
-    std::string marker = "type=daemon_start boot_id=\"";
+    uint64_t restart = 0;
+    std::string previousState;
+    if (readProcFile(SULOG_SESSION_STATE_PATH, previousState)) {
+        size_t space = previousState.find(' ');
+        if (space != std::string::npos) {
+            std::string previousBoot = previousState.substr(0, space);
+            if (previousBoot == bootId) {
+                restart = (uint64_t) strtoull(previousState.c_str() + space + 1, nullptr, 10) + 1;
+            }
+        }
+    }
+    std::string marker = restart == 0 ? "type=daemon_start boot_id=\"" : "type=daemon_restart boot_id=\"";
     suLogAppendEscaped(marker, bootId);
-    marker += "\"\n";
+    marker += "\"";
+    if (restart != 0) {
+        marker += " restart=" + std::to_string(restart);
+    }
+    marker += "\n";
     suLogWriteRaw(marker.data(), marker.size());
-    LOGI("SuLog writer started (%s)", SULOG_DIR);
+
+    std::string state = bootId + " " + std::to_string(restart) + "\n";
+    int stateFd = open(SULOG_SESSION_STATE_PATH, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (stateFd >= 0) {
+        suLogWriteAll(stateFd, state.data(), state.size());
+        close(stateFd);
+    }
+    LOGI("SuLog writer started (%s), restart=%llu", SULOG_DIR, (unsigned long long) restart);
     return true;
 }
 
