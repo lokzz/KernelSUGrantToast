@@ -1,3 +1,16 @@
+### 2.6.1
+修复在部分OEM ROM(如ZTE Android 15)上首次弹出Toast即崩溃的问题
+
+不再使用Toast.makeText读取Settings的路径 失败时回退到窗口叠加显示
+
+Toast相关异常不再导致模块进程退出
+
+Fixes a crash on the first toast on some OEM ROMs (e.g. ZTE Android 15).
+
+The toast is created without makeText's Settings.System lookup, and falls back to a WindowManager overlay if the framework path fails.
+
+Toast failures no longer terminate the module process.
+
 ### 2.6
 模块接管Su日志队列后 会按原格式继续写入磁盘日志(10MiB滚动 默认保留3天)
 

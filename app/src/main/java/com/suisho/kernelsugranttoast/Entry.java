@@ -4,6 +4,9 @@ import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.graphics.PixelFormat;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Process;
@@ -11,6 +14,11 @@ import android.os.VibrationEffect;
 import android.os.VibratorManager;
 import android.util.Log;
 import android.util.LruCache;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.View;
+import android.view.WindowManager;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import com.suisho.kernelsugranttoast.object.SettingArguments;
@@ -107,9 +115,106 @@ public class Entry {
 
     private static void showToast(String appName) {
         if(handler == null) handler = new Handler(Looper.getMainLooper());
-        if(vibratorManager != null && grantVibrationTime > 0)
-            vibratorManager.getDefaultVibrator().vibrate(VibrationEffect.createOneShot(grantVibrationTime, VibrationEffect.EFFECT_HEAVY_CLICK));
-        handler.post(() -> Toast.makeText(systemContext, String.format(Locale.getDefault(), customToastText, appName), toastShowTime).show());
+        if(vibratorManager != null && grantVibrationTime > 0) {
+            try {
+                vibratorManager.getDefaultVibrator().vibrate(VibrationEffect.createOneShot(grantVibrationTime, VibrationEffect.EFFECT_HEAVY_CLICK));
+            } catch (Throwable t) {
+                Log.w(TAG, "Failed to vibrate", t);
+            }
+        }
+        final String text = String.format(Locale.getDefault(), customToastText, appName);
+        handler.post(() -> {
+            // Some OEM Toast.makeText() implementations read Settings.System.
+            // An app_process has no ActivityManager app record, so the settings
+            // provider lookup throws SecurityException; never let that kill the
+            // whole module, and fall back to our own overlay if needed.
+            if(showFrameworkToast(text)) return;
+            if(showOverlayToast(text)) return;
+            Log.e(TAG, "Failed to show toast: " + text);
+        });
+    }
+
+    private static boolean showFrameworkToast(String text) {
+        // Empty constructor + setText skips makeText()'s OEM settings lookup
+        // while still using the system text-toast renderer.
+        try {
+            Toast toast = new Toast(systemContext);
+            toast.setText(text);
+            toast.setDuration(toastShowTime);
+            toast.show();
+            return true;
+        } catch (Throwable t) {
+            Log.w(TAG, "Text toast via constructor failed", t);
+        }
+        // Older frameworks require makeText() + setView.
+        try {
+            Toast.makeText(systemContext, text, toastShowTime).show();
+            return true;
+        } catch (Throwable t) {
+            Log.w(TAG, "Toast.makeText failed", t);
+        }
+        return false;
+    }
+
+    private static View overlayView = null;
+
+    private static boolean showOverlayToast(String text) {
+        try {
+            WindowManager windowManager = (WindowManager) systemContext.getSystemService(Context.WINDOW_SERVICE);
+            if(windowManager == null) return false;
+            removeOverlayToast(windowManager);
+
+            TextView view = new TextView(systemContext);
+            view.setText(text);
+            view.setTextColor(Color.WHITE);
+            view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
+            view.setPadding(dp(24), dp(12), dp(24), dp(12));
+            GradientDrawable background = new GradientDrawable();
+            background.setColor(0xCC000000);
+            background.setCornerRadius(dp(24));
+            view.setBackground(background);
+
+            WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.TYPE_TOAST,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                            | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    PixelFormat.TRANSLUCENT);
+            params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+            params.y = dp(96);
+            params.windowAnimations = android.R.style.Animation_Toast;
+            windowManager.addView(view, params);
+            overlayView = view;
+
+            final View addedView = view;
+            final long delay = toastShowTime == Toast.LENGTH_LONG ? 3500 : 2000;
+            handler.postDelayed(() -> {
+                try {
+                    windowManager.removeView(addedView);
+                } catch (Throwable ignored) {
+                }
+                if(overlayView == addedView) overlayView = null;
+            }, delay);
+            return true;
+        } catch (Throwable t) {
+            Log.e(TAG, "Overlay toast failed", t);
+            return false;
+        }
+    }
+
+    private static void removeOverlayToast(WindowManager windowManager) {
+        if(overlayView == null) return;
+        try {
+            windowManager.removeView(overlayView);
+        } catch (Throwable ignored) {
+        }
+        overlayView = null;
+    }
+
+    private static int dp(int value) {
+        return Math.round(value * systemContext.getResources().getDisplayMetrics().density);
     }
 
     public static void jniOnFallbackSuEvent(String cmdline) {
