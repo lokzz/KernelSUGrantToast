@@ -33,7 +33,6 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.RandomAccessFile;
-import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -135,33 +134,11 @@ public class Entry {
             // An app_process has no ActivityManager app record, so the settings
             // provider lookup throws SecurityException; never let that kill the
             // whole module, and fall back to our own overlay if needed.
-            if(showSystemTextToast(text, duration)) return;
             if(showSystemTextToastDirect(text, duration)) return;
             if(showFrameworkToast(text, duration)) return;
             if(showOverlayToast(text, duration)) return;
             Log.e(TAG, "Failed to show toast: " + text);
         });
-    }
-
-    /**
-     * Forces a text toast through the system renderer. The OEM Toast.setText()
-     * reads Settings.System, which an app_process cannot resolve, so set the
-     * private mText field directly and let Toast.show() enqueue it with
-     * NotificationManagerService (SystemUI renders it, not this process).
-     */
-    private static boolean showSystemTextToast(String text, int duration) {
-        try {
-            Toast toast = new Toast(systemContext);
-            Field textField = Toast.class.getDeclaredField("mText");
-            textField.setAccessible(true);
-            textField.set(toast, text);
-            toast.setDuration(duration);
-            toast.show();
-            return true;
-        } catch (Throwable t) {
-            Log.w(TAG, "System text toast failed", t);
-        }
-        return false;
     }
 
     /**
