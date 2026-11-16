@@ -7,7 +7,9 @@ import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Binder;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.Looper;
 import android.os.Process;
 import android.os.VibrationEffect;
@@ -31,6 +33,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.RandomAccessFile;
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -67,7 +70,8 @@ public class Entry {
             customToastText = tmpArgs.customToastText;
             toastShowTime = tmpArgs.longTimeToast ? Toast.LENGTH_LONG : Toast.LENGTH_SHORT;
             grantVibrationTime = tmpArgs.rootGrantVibrationTime;
-            HiddenApiBypass.addHiddenApiExemptions("Landroid/app/ActivityThread;");
+            HiddenApiBypass.addHiddenApiExemptions("Landroid/app/ActivityThread;", "Landroid/widget/Toast;",
+                    "Landroid/app/INotificationManager;", "Landroid/os/ServiceManager;");
             if(Looper.getMainLooper() == null) Looper.prepareMainLooper();
             @SuppressLint("PrivateApi") Class<?> activityThreadClass = Class.forName("android.app.ActivityThread");
             Object activityThread = HiddenApiBypass.invoke(activityThreadClass, null, "systemMain");
@@ -131,10 +135,60 @@ public class Entry {
             // An app_process has no ActivityManager app record, so the settings
             // provider lookup throws SecurityException; never let that kill the
             // whole module, and fall back to our own overlay if needed.
+            if(showSystemTextToast(text, duration)) return;
+            if(showSystemTextToastDirect(text, duration)) return;
             if(showFrameworkToast(text, duration)) return;
             if(showOverlayToast(text, duration)) return;
             Log.e(TAG, "Failed to show toast: " + text);
         });
+    }
+
+    /**
+     * Forces a text toast through the system renderer. The OEM Toast.setText()
+     * reads Settings.System, which an app_process cannot resolve, so set the
+     * private mText field directly and let Toast.show() enqueue it with
+     * NotificationManagerService (SystemUI renders it, not this process).
+     */
+    private static boolean showSystemTextToast(String text, int duration) {
+        try {
+            Toast toast = new Toast(systemContext);
+            Field textField = Toast.class.getDeclaredField("mText");
+            textField.setAccessible(true);
+            textField.set(toast, text);
+            toast.setDuration(duration);
+            toast.show();
+            return true;
+        } catch (Throwable t) {
+            Log.w(TAG, "System text toast failed", t);
+        }
+        return false;
+    }
+
+    /**
+     * Same queue entry as Toast.show() for text toasts, without touching the
+     * Toast class. NotificationManagerService checks the caller uid against the
+     * "android" package (both 1000), so no ActivityManager app record is needed.
+     */
+    private static boolean showSystemTextToastDirect(String text, int duration) {
+        try {
+            Class<?> serviceManagerClass = Class.forName("android.os.ServiceManager");
+            Object binder = HiddenApiBypass.invoke(serviceManagerClass, null, "getService", "notification");
+            if (!(binder instanceof IBinder)) return false;
+            Class<?> stubClass = Class.forName("android.app.INotificationManager$Stub");
+            Object notificationManager = HiddenApiBypass.invoke(stubClass, null, "asInterface", binder);
+            if (notificationManager == null) return false;
+            Object result = HiddenApiBypass.invoke(notificationManager.getClass(),
+                    notificationManager, "enqueueTextToast",
+                    "android", new Binder(), text, duration, false, 0, null);
+            if (Boolean.FALSE.equals(result)) {
+                Log.w(TAG, "NotificationManagerService refused the toast");
+                return false;
+            }
+            return true;
+        } catch (Throwable t) {
+            Log.w(TAG, "Direct system text toast failed", t);
+        }
+        return false;
     }
 
     private static boolean showFrameworkToast(String text, int duration) {

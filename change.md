@@ -1,3 +1,16 @@
+### 2.6.2
+修复Android 15 OEM ROM上app_process不在ActivityManager中时无法显示Toast的问题
+
+改用系统文本Toast渲染器(NotificationManagerService) SystemUI负责显示 不再依赖本进程被AMS/WMS认识
+
+保留Toast与窗口叠加回退路径 任何失败都不会结束模块进程
+
+Fixes toast display on Android 15 OEM ROMs where the app_process is not known to ActivityManager.
+
+The toast is enqueued as a system text toast through NotificationManagerService (rendered by SystemUI), so no AMS app record or WindowManager session is required.
+
+The Toast and window-overlay paths remain as fallbacks, and no toast failure can terminate the module.
+
 ### 2.6.1
 修复在部分OEM ROM(如ZTE Android 15)上首次弹出Toast即崩溃的问题
 
