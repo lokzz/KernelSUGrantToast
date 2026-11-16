@@ -114,7 +114,6 @@ public class Entry {
     }
 
     private static void showToast(String appName) {
-        if(handler == null) handler = new Handler(Looper.getMainLooper());
         if(vibratorManager != null && grantVibrationTime > 0) {
             try {
                 vibratorManager.getDefaultVibrator().vibrate(VibrationEffect.createOneShot(grantVibrationTime, VibrationEffect.EFFECT_HEAVY_CLICK));
@@ -122,25 +121,29 @@ public class Entry {
                 Log.w(TAG, "Failed to vibrate", t);
             }
         }
-        final String text = String.format(Locale.getDefault(), customToastText, appName);
+        showToastText(String.format(Locale.getDefault(), customToastText, appName), toastShowTime);
+    }
+
+    private static void showToastText(String text, int duration) {
+        if(handler == null) handler = new Handler(Looper.getMainLooper());
         handler.post(() -> {
             // Some OEM Toast.makeText() implementations read Settings.System.
             // An app_process has no ActivityManager app record, so the settings
             // provider lookup throws SecurityException; never let that kill the
             // whole module, and fall back to our own overlay if needed.
-            if(showFrameworkToast(text)) return;
-            if(showOverlayToast(text)) return;
+            if(showFrameworkToast(text, duration)) return;
+            if(showOverlayToast(text, duration)) return;
             Log.e(TAG, "Failed to show toast: " + text);
         });
     }
 
-    private static boolean showFrameworkToast(String text) {
+    private static boolean showFrameworkToast(String text, int duration) {
         // Empty constructor + setText skips makeText()'s OEM settings lookup
         // while still using the system text-toast renderer.
         try {
             Toast toast = new Toast(systemContext);
             toast.setText(text);
-            toast.setDuration(toastShowTime);
+            toast.setDuration(duration);
             toast.show();
             return true;
         } catch (Throwable t) {
@@ -148,7 +151,7 @@ public class Entry {
         }
         // Older frameworks require makeText() + setView.
         try {
-            Toast.makeText(systemContext, text, toastShowTime).show();
+            Toast.makeText(systemContext, text, duration).show();
             return true;
         } catch (Throwable t) {
             Log.w(TAG, "Toast.makeText failed", t);
@@ -158,7 +161,7 @@ public class Entry {
 
     private static View overlayView = null;
 
-    private static boolean showOverlayToast(String text) {
+    private static boolean showOverlayToast(String text, int duration) {
         try {
             WindowManager windowManager = (WindowManager) systemContext.getSystemService(Context.WINDOW_SERVICE);
             if(windowManager == null) return false;
@@ -189,7 +192,7 @@ public class Entry {
             overlayView = view;
 
             final View addedView = view;
-            final long delay = toastShowTime == Toast.LENGTH_LONG ? 3500 : 2000;
+            final long delay = duration == Toast.LENGTH_LONG ? 3500 : 2000;
             handler.postDelayed(() -> {
                 try {
                     windowManager.removeView(addedView);
@@ -334,9 +337,8 @@ public class Entry {
                     Log.i(TAG, "Received IPC message: " + line);
                     //debug toast显示
                     if(line.equals("showDebugToast") || line.equals("showDebugToastLong")) {
-                        if(handler == null) handler = new Handler(Looper.getMainLooper());
-                        String finalLine = line;
-                        handler.post(() -> Toast.makeText(systemContext, "If you can see this toast,the test will passed!", finalLine.equals("showDebugToastLong") ? Toast.LENGTH_LONG : Toast.LENGTH_SHORT).show());
+                        showToastText("If you can see this toast,the test will passed!",
+                                line.equals("showDebugToastLong") ? Toast.LENGTH_LONG : Toast.LENGTH_SHORT);
                         continue;
                     }
                     String[] splitMessage = line.split((char) 0x2 + " ", 2);
